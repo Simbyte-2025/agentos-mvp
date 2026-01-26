@@ -10,7 +10,7 @@ from fastapi import Depends, FastAPI
 
 from agentos.agents.base.agent_base import BaseAgent
 from agentos.api.auth import require_api_key
-from agentos.api.models import ScaffoldRequest, ScaffoldResponse, TaskRequest, TaskResponse
+from agentos.api.models import ApplyRequest, ApplyResponse, ScaffoldRequest, ScaffoldResponse, TaskRequest, TaskResponse
 from agentos.agents.builder.builder_agent import build_scaffold
 from agentos.memory.long_term import LongTermMemory
 from agentos.memory.short_term import ShortTermMemory
@@ -159,3 +159,65 @@ def run_task(req: TaskRequest, _: None = Depends(require_api_key)):
 def scaffold(req: ScaffoldRequest, _: None = Depends(require_api_key)):
     plan = build_scaffold(kind=req.kind, name=req.name, description=req.description, risk=req.risk)
     return ScaffoldResponse(files=plan.get("files", []))
+
+
+@app.post("/builder/apply", response_model=ApplyResponse)
+def apply_scaffold(req: ApplyRequest, _: None = Depends(require_api_key)):
+    """Aplicar archivos generados por scaffold al filesystem.
+    
+    Seguridad:
+    - Bloquea rutas absolutas (ej: /etc/passwd, C:\\Windows)
+    - Bloquea path traversal (..)
+    - No sobrescribe por defecto (overwrite=False)
+    """
+    written: list[str] = []
+    skipped: list[str] = []
+    errors: list[dict[str, str]] = []
+    
+    for file_spec in req.files:
+        path_str = file_spec.get("path", "")
+        content = file_spec.get("content", "")
+        
+        # Validaciones de seguridad
+        if not path_str:
+            errors.append({"path": "(empty)", "error": "Path vacío"})
+            continue
+        
+        # Bloquear rutas absolutas
+        if path_str.startswith("/") or path_str.startswith("\\") or (len(path_str) > 1 and path_str[1] == ":"):
+            errors.append({"path": path_str, "error": "Ruta absoluta no permitida"})
+            continue
+        
+        # Bloquear path traversal
+        if ".." in path_str:
+            errors.append({"path": path_str, "error": "Path traversal (..) no permitido"})
+            continue
+        
+        # Construir path relativo al ROOT del proyecto
+        target_path = ROOT / path_str
+        
+        # Verificar que el path resultante sigue dentro de ROOT
+        try:
+            resolved = target_path.resolve()
+            if not str(resolved).startswith(str(ROOT.resolve())):
+                errors.append({"path": path_str, "error": "Path escapa del proyecto"})
+                continue
+        except Exception as e:
+            errors.append({"path": path_str, "error": f"Error resolviendo path: {e}"})
+            continue
+        
+        # Verificar si existe y si podemos sobrescribir
+        if target_path.exists() and not req.overwrite:
+            skipped.append(path_str)
+            continue
+        
+        # Crear directorios padre si no existen
+        try:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_text(content, encoding="utf-8")
+            written.append(path_str)
+            logger.info(f"Applied scaffold file: {path_str}")
+        except Exception as e:
+            errors.append({"path": path_str, "error": str(e)})
+    
+    return ApplyResponse(written=written, skipped=skipped, errors=errors)

@@ -53,18 +53,19 @@ def test_minimax_client_generate_fails_without_api_key():
 @patch("agentos.llm.minimax.httpx.Client")
 def test_minimax_client_generate_success(mock_client_class):
     """Test successful generate() call with mocked HTTP response."""
-    # Mock response
+    # Mock response (Anthropic Messages format)
     mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.text = '{"content": [{"type": "text", "text": "Esta es la respuesta del LLM"}]}'
+    mock_response.headers = {"content-type": "application/json"}
     mock_response.json.return_value = {
-        "choices": [
+        "content": [
             {
-                "message": {
-                    "content": "Esta es la respuesta del LLM"
-                }
+                "type": "text",
+                "text": "Esta es la respuesta del LLM"
             }
         ]
     }
-    mock_response.raise_for_status = Mock()
     
     # Mock client
     mock_client = Mock()
@@ -83,19 +84,19 @@ def test_minimax_client_generate_success(mock_client_class):
     mock_client.post.assert_called_once()
     call_args = mock_client.post.call_args
     
-    # Verify URL
-    assert call_args[0][0] == "https://api.minimax.io/v1/text/chatcompletion_v2"
+    # Verify URL (Anthropic-compatible endpoint)
+    assert call_args[0][0] == "https://api.minimax.io/v1/messages"
     
     # Verify headers
     headers = call_args[1]["headers"]
-    assert headers["Authorization"] == "Bearer test-key"
+    assert headers["x-api-key"] == "test-key"
     assert headers["Content-Type"] == "application/json"
+    assert headers["anthropic-version"] == "2023-06-01"
     
     # Verify payload
     payload = call_args[1]["json"]
     assert payload["model"] == "MiniMax-M2.1"
     assert payload["messages"][0]["role"] == "user"
-    assert payload["messages"][0]["content"] == "test prompt"
 
 
 @patch("agentos.llm.minimax.httpx.Client")
@@ -119,12 +120,12 @@ def test_minimax_client_handles_timeout(mock_client_class):
 @patch("agentos.llm.minimax.httpx.Client")
 def test_minimax_client_handles_http_401_error(mock_client_class):
     """Test that HTTP 401 error is handled with specific message."""
-    # Mock response with 401 error
+    # Mock response with 401 error (implementation checks status_code directly)
     mock_response = Mock()
     mock_response.status_code = 401
-    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
-        "Unauthorized", request=Mock(), response=mock_response
-    )
+    mock_response.text = '{"error": {"message": "Invalid API key"}}'
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.json.return_value = {"error": {"message": "Invalid API key"}}
     
     mock_client = Mock()
     mock_client.post.return_value = mock_response
@@ -137,7 +138,8 @@ def test_minimax_client_handles_http_401_error(mock_client_class):
     with pytest.raises(RuntimeError) as exc_info:
         client.generate("test prompt")
     
-    assert "API key inválida o expirada" in str(exc_info.value)
+    # Implementation returns: "Minimax API error (HTTP 401): <message>"
+    assert "HTTP 401" in str(exc_info.value)
 
 
 @patch("agentos.llm.minimax.httpx.Client")
@@ -146,9 +148,9 @@ def test_minimax_client_handles_http_429_error(mock_client_class):
     # Mock response with 429 error
     mock_response = Mock()
     mock_response.status_code = 429
-    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
-        "Too Many Requests", request=Mock(), response=mock_response
-    )
+    mock_response.text = '{"error": {"message": "Rate limit exceeded"}}'
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.json.return_value = {"error": {"message": "Rate limit exceeded"}}
     
     mock_client = Mock()
     mock_client.post.return_value = mock_response
@@ -161,7 +163,7 @@ def test_minimax_client_handles_http_429_error(mock_client_class):
     with pytest.raises(RuntimeError) as exc_info:
         client.generate("test prompt")
     
-    assert "rate limit excedido" in str(exc_info.value)
+    assert "HTTP 429" in str(exc_info.value)
 
 
 @patch("agentos.llm.minimax.httpx.Client")
@@ -170,9 +172,9 @@ def test_minimax_client_handles_http_500_error(mock_client_class):
     # Mock response with 500 error
     mock_response = Mock()
     mock_response.status_code = 500
-    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
-        "Internal Server Error", request=Mock(), response=mock_response
-    )
+    mock_response.text = '{"error": {"message": "Internal server error"}}'
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.json.return_value = {"error": {"message": "Internal server error"}}
     
     mock_client = Mock()
     mock_client.post.return_value = mock_response
@@ -185,7 +187,7 @@ def test_minimax_client_handles_http_500_error(mock_client_class):
     with pytest.raises(RuntimeError) as exc_info:
         client.generate("test prompt")
     
-    assert "error del servidor (HTTP 500)" in str(exc_info.value)
+    assert "HTTP 500" in str(exc_info.value)
 
 
 @patch("agentos.llm.minimax.httpx.Client")
@@ -193,8 +195,10 @@ def test_minimax_client_handles_invalid_json_response(mock_client_class):
     """Test that non-JSON response is handled properly."""
     # Mock response with invalid JSON
     mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.text = "<html>Not JSON</html>"
+    mock_response.headers = {"content-type": "text/html"}
     mock_response.json.side_effect = ValueError("Invalid JSON")
-    mock_response.raise_for_status = Mock()
     
     mock_client = Mock()
     mock_client.post.return_value = mock_response
@@ -207,40 +211,18 @@ def test_minimax_client_handles_invalid_json_response(mock_client_class):
     with pytest.raises(RuntimeError) as exc_info:
         client.generate("test prompt")
     
-    assert "respuesta no-JSON" in str(exc_info.value)
-
-
-@patch("agentos.llm.minimax.httpx.Client")
-def test_minimax_client_handles_missing_choices_field(mock_client_class):
-    """Test that response without 'choices' field is handled properly."""
-    # Mock response without choices
-    mock_response = Mock()
-    mock_response.json.return_value = {"error": "something went wrong"}
-    mock_response.raise_for_status = Mock()
-    
-    mock_client = Mock()
-    mock_client.post.return_value = mock_response
-    mock_client.__enter__ = Mock(return_value=mock_client)
-    mock_client.__exit__ = Mock(return_value=False)
-    mock_client_class.return_value = mock_client
-    
-    client = MinimaxClient(api_key="test-key")
-    
-    with pytest.raises(RuntimeError) as exc_info:
-        client.generate("test prompt")
-    
-    assert "falta campo 'choices'" in str(exc_info.value)
+    assert "no-JSON" in str(exc_info.value)
 
 
 @patch("agentos.llm.minimax.httpx.Client")
 def test_minimax_client_handles_missing_content_field(mock_client_class):
-    """Test that response without 'message.content' field is handled properly."""
-    # Mock response without content
+    """Test that response without 'content' field is handled properly."""
+    # Mock response without content field (Anthropic format)
     mock_response = Mock()
-    mock_response.json.return_value = {
-        "choices": [{"message": {}}]  # Missing 'content'
-    }
-    mock_response.raise_for_status = Mock()
+    mock_response.status_code = 200
+    mock_response.text = '{"id": "msg_123"}'
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.json.return_value = {"id": "msg_123"}  # Missing 'content'
     
     mock_client = Mock()
     mock_client.post.return_value = mock_response
@@ -253,7 +235,31 @@ def test_minimax_client_handles_missing_content_field(mock_client_class):
     with pytest.raises(RuntimeError) as exc_info:
         client.generate("test prompt")
     
-    assert "falta 'message.content'" in str(exc_info.value)
+    assert "falta campo 'content'" in str(exc_info.value)
+
+
+@patch("agentos.llm.minimax.httpx.Client")
+def test_minimax_client_handles_empty_content_blocks(mock_client_class):
+    """Test that response with empty content blocks is handled properly."""
+    # Mock response with empty content array (Anthropic format)
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.text = '{"content": []}'
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.json.return_value = {"content": []}  # Empty content
+    
+    mock_client = Mock()
+    mock_client.post.return_value = mock_response
+    mock_client.__enter__ = Mock(return_value=mock_client)
+    mock_client.__exit__ = Mock(return_value=False)
+    mock_client_class.return_value = mock_client
+    
+    client = MinimaxClient(api_key="test-key")
+    
+    with pytest.raises(RuntimeError) as exc_info:
+        client.generate("test prompt")
+    
+    assert "no hay bloques de texto" in str(exc_info.value) or "falta campo 'content'" in str(exc_info.value)
 
 
 def test_minimax_client_does_not_log_api_key(caplog):

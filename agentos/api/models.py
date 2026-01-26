@@ -28,3 +28,16 @@ class ScaffoldRequest(BaseModel):
 
 class ScaffoldResponse(BaseModel):
     files: List[Dict[str, str]]
+
+
+class ApplyRequest(BaseModel):
+    """Request para aplicar archivos generados por scaffold."""
+    files: List[Dict[str, str]] = Field(..., description="Lista de {path, content}")
+    overwrite: bool = Field(False, description="Si True, sobrescribe archivos existentes")
+
+
+class ApplyResponse(BaseModel):
+    """Respuesta de aplicar archivos."""
+    written: List[str] = Field(default_factory=list, description="Archivos escritos exitosamente")
+    skipped: List[str] = Field(default_factory=list, description="Archivos omitidos (ya existen)")
+    errors: List[Dict[str, str]] = Field(default_factory=list, description="Errores {path, error}")
