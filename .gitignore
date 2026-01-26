@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.dist/
+.build/
+.venv/
+.env
+.env.*
+.DS_Store
+.idea/
+.vscode/
+.pytest_cache/
+.mypy_cache/
+agentos_state.db

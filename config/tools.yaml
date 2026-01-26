@@ -1,0 +1,21 @@
+tools:
+  - name: read_file
+    class_path: agentos.tools.filesystem.read_file.ReadFileTool
+    risk: read
+    description: "Lee un archivo dentro del workspace permitido."
+  - name: http_fetch
+    class_path: agentos.tools.http.fetch.HttpFetchTool
+    risk: read
+    description: "Realiza una petición HTTP GET con timeout y manejo de errores."
+  - name: run_command
+    class_path: agentos.tools.exec.run_command.RunCommandTool
+    risk: execute
+    description: "Ejecuta comandos del sistema con allowlist estricta y modo sandbox."
+    config:
+      allowed_commands:
+        - python
+        - pytest
+        - dir
+        - type
+      max_timeout_s: 300
+      default_timeout_s: 30

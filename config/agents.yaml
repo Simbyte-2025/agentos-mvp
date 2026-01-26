@@ -1,0 +1,17 @@
+agents:
+  - name: researcher_agent
+    class_path: agentos.agents.specialist.researcher_agent.ResearcherAgent
+    profile: researcher_agent
+    description: "Investiga, recupera información y prepara hallazgos."
+  - name: writer_agent
+    class_path: agentos.agents.specialist.writer_agent.WriterAgent
+    profile: writer_agent
+    description: "Redacta respuestas y documentos basados en inputs."
+  - name: reviewer_agent
+    class_path: agentos.agents.specialist.reviewer_agent.ReviewerAgent
+    profile: reviewer_agent
+    description: "Revisa calidad, coherencia y riesgos."
+  - name: builder_agent
+    class_path: agentos.agents.builder.builder_agent.BuilderAgent
+    profile: builder_agent
+    description: "Genera planes de scaffolding para nuevos agentes y herramientas."

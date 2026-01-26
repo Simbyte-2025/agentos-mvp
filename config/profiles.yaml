@@ -1,0 +1,38 @@
+# Perfiles de permisos (principio de mínimo privilegio)
+# Nota: los agentes NO pueden auto-asignarse permisos.
+
+researcher_agent:
+  permissions:
+    - tool: read_file
+      actions: [read]
+    - tool: http_fetch
+      actions: [read]
+  forbidden:
+    - tool: "*"
+      actions: [write, delete, execute]
+
+writer_agent:
+  permissions:
+    - tool: read_file
+      actions: [read]
+  forbidden:
+    - tool: "*"
+      actions: [write, delete, execute]
+
+reviewer_agent:
+  permissions:
+    - tool: read_file
+      actions: [read]
+  forbidden:
+    - tool: "*"
+      actions: [write, delete, execute]
+
+builder_agent:
+  permissions:
+    - tool: read_file
+      actions: [read]
+    - tool: run_command
+      actions: [execute]
+  forbidden:
+    - tool: "*"
+      actions: [write, delete]
