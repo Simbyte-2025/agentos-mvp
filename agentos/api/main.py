@@ -157,8 +157,20 @@ def run_task(req: TaskRequest, _: None = Depends(require_api_key)):
 
 @app.post("/builder/scaffold", response_model=ScaffoldResponse)
 def scaffold(req: ScaffoldRequest, _: None = Depends(require_api_key)):
-    plan = build_scaffold(kind=req.kind, name=req.name, description=req.description, risk=req.risk)
-    return ScaffoldResponse(files=plan.get("files", []))
+    # Pasamos ROOT explícitamente para evitar os.getcwd()
+    res = build_scaffold(
+        kind=req.kind, 
+        name=req.name, 
+        description=req.description, 
+        risk=req.risk,
+        root_dir=ROOT
+    )
+    return ScaffoldResponse(
+        plan=res.get("plan"),
+        files=res.get("files", []),
+        unified_diff=res.get("unified_diff", ""),
+        warnings=res.get("warnings", [])
+    )
 
 
 @app.post("/builder/apply", response_model=ApplyResponse)
