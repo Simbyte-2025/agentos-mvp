@@ -391,10 +391,10 @@ def test_sanitize_command_removes_secrets():
     client = MCPStdioClient()
     
     # Various secret patterns
-    assert "***" in client._sanitize_command("cmd --api_key=secret123")
-    assert "***" in client._sanitize_command("cmd token=abc123")
-    assert "***" in client._sanitize_command("cmd --secret=xxx")
-    assert "***" in client._sanitize_command("cmd PASSWORD=pass")
+    assert "***" in client._sanitize_command("cmd --api_key=x")
+    assert "***" in client._sanitize_command("cmd token=x")
+    assert "***" in client._sanitize_command("cmd --secret=x")
+    assert "***" in client._sanitize_command("cmd PASSWORD=x")
     
     # Normal commands should not be affected
     assert client._sanitize_command("uvx mcp-server") == "uvx mcp-server"
@@ -407,12 +407,12 @@ def test_no_secrets_in_logs(caplog):
     caplog.set_level(logging.DEBUG)
     
     # Changed from real-looking secret to placeholder as per security finding
-    client = MCPStdioClient(server_command="mcp --api_key=DUMMY_TOKEN_FOR_TESTING")
+    client = MCPStdioClient(server_command="mcp --api_key=x")
     
     # Check logs don't contain the secret
     for record in caplog.records:
-        assert "DUMMY_TOKEN_FOR_TESTING" not in record.message
-        assert "DUMMY_TOKEN_FOR_TESTING" not in str(record.__dict__)
+        assert " --api_key=" not in record.message
+        assert " --api_key=" not in str(record.__dict__)
 
 
 # =============================================================================
