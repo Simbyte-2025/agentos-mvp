@@ -43,7 +43,10 @@ def bootstrap_agents() -> List[BaseAgent]:
     agents: List[BaseAgent] = []
     for a in agents_cfg:
         cls = import_class(a["class_path"])
-        agents.append(cls(name=a["name"], description=a.get("description", ""), profile=a.get("profile", a["name"])))
+        kwargs = {}
+        if cls.__name__ == "BuilderAgent":
+            kwargs["root_dir"] = ROOT
+        agents.append(cls(name=a["name"], description=a.get("description", ""), profile=a.get("profile", a["name"]), **kwargs))
     return agents
 
 
@@ -155,10 +158,33 @@ def run_task(req: TaskRequest, _: None = Depends(require_api_key)):
     return TaskResponse(agent=res.agent_name, success=res.success, output=res.output, error=res.error, meta=res.meta)
 
 
+from agentos.agents.builder.schemas import PlanSummary
+
+
 @app.post("/builder/scaffold", response_model=ScaffoldResponse)
 def scaffold(req: ScaffoldRequest, _: None = Depends(require_api_key)):
-    plan = build_scaffold(kind=req.kind, name=req.name, description=req.description, risk=req.risk)
-    return ScaffoldResponse(files=plan.get("files", []))
+    try:
+        result = build_scaffold(kind=req.kind, name=req.name, description=req.description, risk=req.risk, root_dir=ROOT)
+        return ScaffoldResponse(
+            files=result.get("files", []),
+            plan=result.get("plan"),
+            unified_diff=result.get("unified_diff", ""),
+            warnings=result.get("warnings", [])
+        )
+    except Exception as e:
+        # Contract: return valid structure even on error
+        error_plan = PlanSummary(
+            name=req.name,
+            description=req.description,
+            changes=[],
+            metadata={"error": str(e), "status": "failed"}
+        )
+        return ScaffoldResponse(
+            files=[],
+            plan=error_plan,
+            unified_diff="",
+            warnings=[f"Error generating scaffold: {str(e)}"]
+        )
 
 
 @app.post("/builder/apply", response_model=ApplyResponse)

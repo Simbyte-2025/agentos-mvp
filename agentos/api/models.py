@@ -26,8 +26,13 @@ class ScaffoldRequest(BaseModel):
     risk: str = Field("read", description="read|write|delete|execute (solo si kind=tool)")
 
 
+from agentos.agents.builder.schemas import PlanSummary
+
 class ScaffoldResponse(BaseModel):
     files: List[Dict[str, str]]
+    plan: PlanSummary
+    unified_diff: str
+    warnings: List[str] = Field(default_factory=list)
 
 
 class ApplyRequest(BaseModel):

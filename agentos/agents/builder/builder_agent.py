@@ -8,7 +8,12 @@ from agentos.agents.base.agent_base import AgentContext, BaseAgent, ExecutionRes
 from .scaffold import scaffold_agent, scaffold_tool
 
 
+
 class BuilderAgent(BaseAgent):
+    def __init__(self, name: str, description: str, profile: str, root_dir: Path | None = None):
+        super().__init__(name, description, profile)
+        self.root_dir = root_dir
+
     def can_handle(self, task: str) -> bool:
         t = task.lower()
         return "crear agente" in t or "crear tool" in t or "scaffold" in t
@@ -38,23 +43,44 @@ class BuilderAgent(BaseAgent):
         kind, name, description = parsed
         
         try:
-            plan = build_scaffold(kind=kind, name=name, description=description)
-            files = plan.get("files", [])
+            if not self.root_dir:
+                 raise ValueError("BuilderAgent no tiene configured root_dir")
+
+            # Llamar con root_dir
+            scaffold_result = build_scaffold(kind=kind, name=name, description=description, root_dir=self.root_dir)
             
+            # Extraer componentes
+            # scaffold_result keys: files, plan, unified_diff, warnings
+            files = scaffold_result.get("files", [])
+            plan_summary = scaffold_result.get("plan") # PlanSummary obj
+            unified_diff = scaffold_result.get("unified_diff", "")
+            warnings = scaffold_result.get("warnings", [])
+
             # Formatear respuesta con el plan
+            # plan_summary es un objeto, acceder a atributos si es necesario o usar dict
+            # scaffold.py devuelve dict con 'plan': PlanSummary object
+            
             file_list = "\\n".join([f"  - {f['path']}" for f in files])
             output = (
                 f"Plan de scaffold generado (kind={kind}, name={name}):\\n"
                 f"Archivos a crear:\\n{file_list}\\n\\n"
+                f"Diff:\\n{unified_diff}\\n\\n"
                 f"Para aplicar, usa POST /builder/apply con:\\n"
                 f'{json.dumps({"files": files}, indent=2, ensure_ascii=False)}'
             )
             
+            meta = {
+                "scaffold_plan": plan_summary.model_dump() if hasattr(plan_summary, "model_dump") else str(plan_summary),
+                "kind": kind,
+                "name": name, 
+                "warnings": warnings
+            }
+
             return ExecutionResult(
                 agent_name=self.name,
                 success=True,
                 output=output,
-                meta={"scaffold_plan": plan, "kind": kind, "name": name}
+                meta=meta
             )
             
         except ValueError as e:
@@ -106,11 +132,11 @@ class BuilderAgent(BaseAgent):
         return None
 
 
-def build_scaffold(kind: str, name: str, description: str, risk: str = "read") -> Dict:
+def build_scaffold(kind: str, name: str, description: str, root_dir: Path, risk: str = "read") -> Dict:
     kind = (kind or "").strip().lower()
     if kind == "agent":
-        return scaffold_agent(name=name, description=description)
+        return scaffold_agent(name=name, description=description, root_dir=root_dir)
     if kind == "tool":
-        return scaffold_tool(name=name, description=description, risk=risk)
+        return scaffold_tool(name=name, description=description, risk=risk, root_dir=root_dir)
     raise ValueError("kind debe ser: agent | tool")
 
