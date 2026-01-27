@@ -26,17 +26,8 @@ class ScaffoldRequest(BaseModel):
     risk: str = Field("read", description="read|write|delete|execute (solo si kind=tool)")
 
 
-class PlanSummary(BaseModel):
-    name: str
-    description: str
-    changes: List[Dict[str, str]] = Field(..., description="Lista de {path, operation}")
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-
 class ScaffoldResponse(BaseModel):
-    plan: PlanSummary
-    files: List[Dict[str, str]] = Field(default_factory=list)
-    unified_diff: str = Field("", description="Parche unificado compatible con git apply")
-    warnings: List[str] = Field(default_factory=list)
+    files: List[Dict[str, str]]
 
 
 class ApplyRequest(BaseModel):

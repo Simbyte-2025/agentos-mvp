@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Dict, Optional, Any
-from pathlib import Path
+from typing import Dict
 
 from agentos.agents.base.agent_base import AgentContext, BaseAgent, ExecutionResult
-from .scaffold import ScaffoldManager
-from .patch_generator import PatchGenerator
+from .scaffold import scaffold_agent, scaffold_tool
 
 
 class BuilderAgent(BaseAgent):
@@ -25,13 +23,14 @@ class BuilderAgent(BaseAgent):
         parsed = self._parse_task(task)
         
         if parsed is None:
+            # No se pudo parsear, devolver guía de uso
             return ExecutionResult(
                 agent_name=self.name,
                 success=True,
                 output=(
-                    "No pude interpretar la solicitud. Usa formato:\n"
-                    '\"Crear agente <nombre>: <descripción>\"\n'
-                    '\"Crear tool <nombre>: <descripción>\"\n\n'
+                    "No pude interpretar la solicitud. Usa formato:\\n"
+                    '"Crear agente <nombre>: <descripción>"\\n'
+                    '"Crear tool <nombre>: <descripción>"\\n\\n'
                     "O usa el endpoint POST /builder/scaffold directamente con kind=agent|tool."
                 ),
             )
@@ -39,26 +38,26 @@ class BuilderAgent(BaseAgent):
         kind, name, description = parsed
         
         try:
-            # Usamos la lógica centralizada
-            res = build_scaffold(kind=kind, name=name, description=description)
-            files = res.get("files", [])
+            plan = build_scaffold(kind=kind, name=name, description=description)
+            files = plan.get("files", [])
             
             # Formatear respuesta con el plan
-            file_list = "\n".join([f"  - {f['path']}" for f in files])
+            file_list = "\\n".join([f"  - {f['path']}" for f in files])
             output = (
-                f"Plan de scaffold generado (kind={kind}, name={name}):\n"
-                f"Archivos a crear:\n{file_list}\n\n"
-                f"Para aplicar, usa POST /builder/apply con el unified_diff o los archivos."
+                f"Plan de scaffold generado (kind={kind}, name={name}):\\n"
+                f"Archivos a crear:\\n{file_list}\\n\\n"
+                f"Para aplicar, usa POST /builder/apply con:\\n"
+                f'{json.dumps({"files": files}, indent=2, ensure_ascii=False)}'
             )
             
             return ExecutionResult(
                 agent_name=self.name,
                 success=True,
                 output=output,
-                meta={"scaffold_plan": res, "kind": kind, "name": name}
+                meta={"scaffold_plan": plan, "kind": kind, "name": name}
             )
             
-        except Exception as e:
+        except ValueError as e:
             return ExecutionResult(
                 agent_name=self.name,
                 success=False,
@@ -67,7 +66,20 @@ class BuilderAgent(BaseAgent):
             )
     
     def _parse_task(self, task: str) -> tuple[str, str, str] | None:
+        """Parsear task para extraer kind, name, description.
+        
+        Formatos soportados:
+        - "Crear agente <nombre>: <descripción>"
+        - "Crear tool <nombre>: <descripción>"
+        - "scaffold agent <nombre>: <descripción>"
+        - "scaffold tool <nombre>: <descripción>"
+        
+        Returns:
+            Tuple (kind, name, description) o None si no se puede parsear
+        """
         t = task.strip().lower()
+        
+        # Detectar kind
         kind = None
         if "agente" in t or "agent" in t:
             kind = "agent"
@@ -77,6 +89,8 @@ class BuilderAgent(BaseAgent):
         if kind is None:
             return None
         
+        # Extraer nombre y descripción con regex
+        # Patrones: "crear agente <nombre>: <desc>" o "crear agente <nombre> - <desc>"
         patterns = [
             r"(?:crear|scaffold)\s+(?:agente|agent|tool|herramienta)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*[:\-]\s*(.+)",
             r"(?:crear|scaffold)\s+(?:agente|agent|tool|herramienta)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+(.+)",
@@ -92,53 +106,11 @@ class BuilderAgent(BaseAgent):
         return None
 
 
-def build_scaffold(kind: str, name: str, description: str, risk: str = "read", root_dir: Optional[str | Path] = None) -> Dict[str, Any]:
-    # Si no se provee root_dir, intentamos derivarlo de forma segura
-    if root_dir is None:
-        # Fallback al directorio del archivo actual -> parents[3] para llegar al root del repo
-        root_dir = Path(__file__).resolve().parents[3]
-    else:
-        root_dir = Path(root_dir).resolve()
-
-    manager = ScaffoldManager(root_dir)
-    generator = PatchGenerator(root_dir)
-    
+def build_scaffold(kind: str, name: str, description: str, risk: str = "read") -> Dict:
     kind = (kind or "").strip().lower()
-    try:
-        if kind == "agent":
-            plan = manager.create_agent_scaffold(name=name, description=description)
-        elif kind == "tool":
-            plan = manager.create_tool_scaffold(name=name, description=description, risk=risk)
-        else:
-            raise ValueError("kind debe ser: agent | tool")
-        
-        diff = generator.generate_unified_diff(plan)
-        
-        # Estructuramos el plan_summary para la API (v2.3)
-        plan_summary = {
-            "name": plan.name,
-            "description": plan.description,
-            "changes": [{"path": c.path, "operation": c.operation} for c in plan.changes],
-            "metadata": plan.metadata
-        }
-        
-        return {
-            "plan": plan_summary,
-            "files": [{"path": c.path, "content": c.content} for c in plan.changes],
-            "unified_diff": diff,
-            "warnings": []
-        }
-    except Exception as e:
-        # Contrato de error consistente con PlanSummary (v2.3)
-        return {
-            "error": str(e),
-            "plan": {
-                "name": "Error de Generación",
-                "description": str(e),
-                "changes": [],
-                "metadata": {}
-            },
-            "files": [],
-            "unified_diff": "",
-            "warnings": [f"Error en generación: {str(e)}"]
-        }
+    if kind == "agent":
+        return scaffold_agent(name=name, description=description)
+    if kind == "tool":
+        return scaffold_tool(name=name, description=description, risk=risk)
+    raise ValueError("kind debe ser: agent | tool")
+
