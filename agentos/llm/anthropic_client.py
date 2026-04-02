@@ -2,10 +2,41 @@
 
 from __future__ import annotations
 
+import random
+import time
+from functools import wraps
 from typing import Optional
 
 from agentos.llm.base import LLMClient
 from agentos.observability.logging import get_logger
+
+RETRYABLE_STATUS = {429, 529, 408, 409, 500, 502, 503, 504}
+
+
+def with_llm_retry(max_retries=5):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(1, max_retries + 2):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    status = getattr(e, 'status_code', None)
+                    if status not in RETRYABLE_STATUS:
+                        raise
+                    if attempt > max_retries:
+                        raise
+                    try:
+                        ra = e.response.headers.get("retry-after")
+                        delay = float(ra) if ra else None
+                    except Exception:
+                        delay = None
+                    if not delay:
+                        base = min(0.5 * (2 ** (attempt - 1)), 32)
+                        delay = base + random.random() * 0.25 * base
+                    time.sleep(delay)
+        return wrapper
+    return decorator
 
 
 class AnthropicClient(LLMClient):
@@ -43,6 +74,7 @@ class AnthropicClient(LLMClient):
         self.timeout = timeout
         self.logger = get_logger("agentos")
 
+    @with_llm_retry()
     def generate(self, prompt: str) -> str:
         """Generar texto usando Anthropic Claude API.
 
