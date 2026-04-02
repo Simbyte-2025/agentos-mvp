@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import os
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -56,6 +57,16 @@ def bootstrap_tools() -> List[BaseTool]:
         tools.append(cls())
     return tools
 
+
+class TaskStatus(str, Enum):
+    QUEUED = "queued"
+    PLANNING = "planning"
+    EXECUTING = "executing"
+    SUMMARIZING = "summarizing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+_task_states: Dict[str, TaskStatus] = {}
 
 app = FastAPI(title="AgentOS MVP")
 
@@ -153,6 +164,17 @@ def healthz():
 def run_task(req: TaskRequest, _: None = Depends(require_api_key)):
     res = _orchestrator.run(task=req.task, session_id=req.session_id, user_id=req.user_id)
     return TaskResponse(agent=res.agent_name, success=res.success, output=res.output, error=res.error, meta=res.meta)
+
+
+@app.get("/status/{task_id}")
+def get_task_status(task_id: str, _: None = Depends(require_api_key)):
+    status = _task_states.get(task_id, TaskStatus.QUEUED)
+    return {"task_id": task_id, "status": status}
+
+
+@app.get("/tasks")
+def list_tasks(_: None = Depends(require_api_key)):
+    return {"tasks": [{"task_id": k, "status": v} for k, v in _task_states.items()]}
 
 
 @app.post("/builder/scaffold", response_model=ScaffoldResponse)

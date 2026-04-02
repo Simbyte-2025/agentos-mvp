@@ -27,6 +27,8 @@ class AgentContext:
 
 
 class BaseAgent(ABC):
+    max_turns: int = 10  # límite de turns por ejecución
+
     def __init__(self, name: str, description: str, profile: str):
         self.name = name
         self.description = description
