@@ -360,7 +360,7 @@ class PlannerExecutorOrchestrator:
             ExecutionResult from the agent execution
         """
         subtask.status = "running"
-        
+
         self.logger.info(
             "Executing subtask",
             extra={
@@ -369,62 +369,82 @@ class PlannerExecutorOrchestrator:
                 "objetivo": subtask.objetivo
             }
         )
-        
-        # Select agent for this subtask
-        agent = self.agent_router.select_agent(subtask.objetivo, self.agents)
-        
-        if agent is None:
+
+        try:
+            # Select agent for this subtask
+            agent = self.agent_router.select_agent(subtask.objetivo, self.agents)
+
+            if agent is None:
+                return ExecutionResult(
+                    agent_name="none",
+                    success=False,
+                    output="",
+                    error="No hay agentes cargados"
+                )
+
+            # Select tools for this subtask
+            selected_tools = self.tool_router.select_tools(
+                subtask.objetivo,
+                agent.profile,
+                self.tools,
+                self.permission_validator
+            )
+            tool_map: Mapping[str, BaseTool] = {t.name: t for t in selected_tools}
+
+            # Build context
+            ctx = AgentContext(
+                request_id=request_id,
+                session_id=session_id,
+                user_id=user_id,
+                tools=tool_map,
+                memory={
+                    "short_term": self.short_term.get(session_id),
+                    "retrieved": [],
+                    "original_task": original_task,
+                    "subtask_objetivo": subtask.objetivo,
+                    "criterios_exito": subtask.criterios_exito,
+                    "llm_client": self.llm_client,
+                },
+                logger=self.logger,
+            )
+
+            # Execute
+            result = agent.execute(subtask.objetivo, ctx)
+
+            # Track tool calls if available
+            if result.meta and "tool_calls" in result.meta:
+                subtask.tool_calls = result.meta["tool_calls"]
+
+            self.logger.info(
+                "Subtask execution completed",
+                extra={
+                    "request_id": request_id,
+                    "subtask_id": subtask.id,
+                    "success": result.success,
+                    "agent": result.agent_name
+                }
+            )
+
+            return result
+
+        except Exception as e:
+            self.logger.error(
+                f"Subtask {subtask.id} raised: {e}",
+                extra={"request_id": request_id, "subtask_id": subtask.id}
+            )
             return ExecutionResult(
-                agent_name="none",
+                agent_name="error",
                 success=False,
                 output="",
-                error="No hay agentes cargados"
+                error=str(e)
             )
-        
-        # Select tools for this subtask
-        selected_tools = self.tool_router.select_tools(
-            subtask.objetivo,
-            agent.profile,
-            self.tools,
-            self.permission_validator
-        )
-        tool_map: Mapping[str, BaseTool] = {t.name: t for t in selected_tools}
-        
-        # Build context
-        ctx = AgentContext(
-            request_id=request_id,
-            session_id=session_id,
-            user_id=user_id,
-            tools=tool_map,
-            memory={
-                "short_term": self.short_term.get(session_id),
-                "retrieved": [],
-                "original_task": original_task,
-                "subtask_objetivo": subtask.objetivo,
-                "criterios_exito": subtask.criterios_exito,
-                "llm_client": self.llm_client,
-            },
-            logger=self.logger,
-        )
-        
-        # Execute
-        result = agent.execute(subtask.objetivo, ctx)
-        
-        # Track tool calls if available
-        if result.meta and "tool_calls" in result.meta:
-            subtask.tool_calls = result.meta["tool_calls"]
-        
-        self.logger.info(
-            "Subtask execution completed",
-            extra={
-                "request_id": request_id,
-                "subtask_id": subtask.id,
-                "success": result.success,
-                "agent": result.agent_name
-            }
-        )
-        
-        return result
+
+        finally:
+            self._cleanup_subtask_resources(subtask)
+
+    def _cleanup_subtask_resources(self, subtask: Subtask) -> None:
+        """Hook de cleanup por subtask. Override para recursos específicos."""
+        pass  # extensible sin romper subclases
 
     def _execute_as_single_task(
         self,
