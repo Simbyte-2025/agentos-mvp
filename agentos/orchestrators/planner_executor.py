@@ -90,7 +90,16 @@ class PlannerExecutorOrchestrator:
         
         # Add task to short-term memory
         self.short_term.add(session_id, f"USER: {task}")
-        
+
+        # Restore previous conversation history from SQLite
+        try:
+            history = self.working_state.load_checkpoint(session_id, "conversation_history")
+            if history and isinstance(history, dict):
+                for msg in history.get("messages", []):
+                    self.short_term.add(session_id, msg)
+        except Exception:
+            pass
+
         # Initial planning
         subtasks = self._plan(task, rid, session_id)
         
@@ -210,6 +219,19 @@ class PlannerExecutorOrchestrator:
             created_at=datetime.now(timezone.utc).isoformat(),
         )
         
+        # Persist conversation history to SQLite for cross-restart continuity
+        try:
+            messages = self.short_term.get(session_id)
+            if messages:
+                self.working_state.save_checkpoint(
+                    session_id=session_id,
+                    name="conversation_history",
+                    data={"messages": list(messages)},
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                )
+        except Exception:
+            pass
+
         # Add to short-term memory
         self.short_term.add(session_id, f"AGENT(planner_executor): {final_output}")
         

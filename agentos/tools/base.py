@@ -6,6 +6,15 @@ from typing import Any, Dict, Optional
 from pydantic import BaseModel, Field
 
 
+class ValidationResult:
+    """Result of a tool input validation check."""
+
+    def __init__(self, valid: bool, error: Optional[str] = None, behavior: str = "deny"):
+        self.valid = valid
+        self.error = error
+        self.behavior = behavior  # "deny" | "ask" | "allow"
+
+
 class ToolInput(BaseModel):
     """Input estándar para tools."""
 
@@ -31,6 +40,14 @@ class BaseTool(ABC):
         self.name = name
         self.description = description
         self.risk = risk
+
+    def validate(self, tool_input) -> ValidationResult:
+        """Validate tool input before execution. Override to add custom checks."""
+        return ValidationResult(valid=True)
+
+    def is_read_only(self, tool_input=None) -> bool:
+        """Return True if this tool call is read-only (no side effects)."""
+        return getattr(self, "risk", "") == "read"
 
     @abstractmethod
     def execute(self, tool_input: ToolInput) -> ToolOutput:
