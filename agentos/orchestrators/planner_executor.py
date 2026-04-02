@@ -14,6 +14,8 @@ from agentos.memory.long_term import LongTermMemory
 from agentos.memory.short_term import ShortTermMemory
 from agentos.memory.working_state import WorkingStateStore
 from agentos.observability.logging import get_logger
+from agentos.prompts.base import COORDINATOR_PROMPT
+from agentos.prompts.sections import PromptSection, build_system_prompt
 from agentos.security.permissions import PermissionValidator
 from agentos.tools.base import BaseTool
 
@@ -250,7 +252,8 @@ class PlannerExecutorOrchestrator:
         context_items = [it.text for it in retrieved]
         
         # Build planning prompt
-        prompt = self._build_planning_prompt(task, context_items)
+        context_str = "\n".join(f"- {c}" for c in context_items[:3]) if context_items else ""
+        prompt = self._build_planning_prompt(task, context_str)
         
         try:
             # Generate plan using LLM
@@ -540,41 +543,38 @@ class PlannerExecutorOrchestrator:
             )
             raise
 
-    def _build_planning_prompt(self, task: str, context: List[str]) -> str:
-        """Build prompt for initial planning.
-        
+    def _build_planning_prompt(self, task: str, context_str: str = "") -> str:
+        """Build prompt for initial planning using PromptSection composition.
+
         Args:
             task: The task to plan
-            context: Relevant context from long-term memory
-            
+            context_str: Pre-formatted context string from long-term memory
+
         Returns:
             Formatted prompt string
         """
-        context_str = "\n".join(f"- {c}" for c in context[:3]) if context else "Ninguno"
-        
-        return f"""Eres un planificador de tareas. Descompón la siguiente tarea en subtareas ejecutables.
+        sections = [
+            PromptSection("coordinator_role", lambda: COORDINATOR_PROMPT, cached=True),
+            PromptSection("available_agents", lambda: self._get_agents_context(), cached=True),
+            PromptSection("task", lambda t=task: f"## Tarea a planificar\n{t}", cached=False),
+            PromptSection("context", lambda c=context_str: f"## Contexto relevante\n{c}" if c else None, cached=False),
+            PromptSection("output_format", lambda: (
+                "## Formato de respuesta\n"
+                "Responde SOLO con JSON válido:\n"
+                '{"subtasks": [{"id": "st_1", "objetivo": "...", "agente": "nombre_agente", "dependencias": []}]}'
+            ), cached=True),
+        ]
+        return build_system_prompt(sections)
 
-Tarea: {task}
-
-Contexto relevante:
-{context_str}
-
-Responde SOLO con un JSON válido en este formato exacto:
-{{
-  "subtasks": [
-    {{
-      "id": "1",
-      "objetivo": "descripción clara de la subtarea",
-      "criterios_exito": ["criterio 1", "criterio 2"]
-    }}
-  ]
-}}
-
-Reglas:
-- Cada subtarea debe ser específica y ejecutable
-- Los IDs deben ser únicos
-- Incluye 1-5 subtareas máximo
-- NO incluyas texto adicional fuera del JSON"""
+    def _get_agents_context(self) -> str:
+        """Describe los agentes disponibles para el coordinator."""
+        try:
+            agent_names = [a.profile.name for a in self.agents] if self.agents else []
+            if agent_names:
+                return "## Agentes disponibles\n" + "\n".join(f"- {name}" for name in agent_names)
+        except Exception:
+            pass
+        return ""
 
     def _build_replanning_prompt(
         self,
