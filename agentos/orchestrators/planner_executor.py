@@ -82,7 +82,16 @@ class PlannerExecutorOrchestrator:
             ExecutionResult with aggregated results from all subtasks
         """
         rid = request_id or str(uuid.uuid4())
-        
+
+        # Restaurar historial previo
+        try:
+            history = self.working_state.load_checkpoint(session_id, "conversation_history")
+            if history and isinstance(history, dict):
+                for msg in history.get("messages", []):
+                    self.short_term.add(session_id, msg)
+        except Exception:
+            pass
+
         self.logger.info(
             "PlannerExecutorOrchestrator starting",
             extra={"request_id": rid, "session_id": session_id, "user_id": user_id, "task": task}
@@ -212,7 +221,19 @@ class PlannerExecutorOrchestrator:
         
         # Add to short-term memory
         self.short_term.add(session_id, f"AGENT(planner_executor): {final_output}")
-        
+
+        # Persistir historial de conversación
+        try:
+            messages = self.short_term.get(session_id)
+            if messages:
+                self.working_state.save_checkpoint(
+                    session_id, "conversation_history",
+                    {"messages": list(messages)},
+                    datetime.now(timezone.utc).isoformat(),
+                )
+        except Exception:
+            pass
+
         self.logger.info(
             "PlannerExecutorOrchestrator completed",
             extra={
