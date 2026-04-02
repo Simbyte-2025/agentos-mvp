@@ -1,9 +1,20 @@
 # Perfiles de permisos (principio de mínimo privilegio)
 # Nota: los agentes NO pueden auto-asignarse permisos.
+#
+# Wildcards soportados en 'tool' (fnmatch):
+#   - "read_file"  → exact match
+#   - "read_*"     → cualquier tool que empiece con read_
+#   - "*"          → todas las tools
+#
+# path_pattern (opcional) restringe por ruta de archivo:
+#   - "src/**"  → solo archivos bajo src/
+#   - "*.py"    → solo archivos .py
 
 researcher_agent:
   permissions:
     - tool: read_file
+      actions: [read]
+    - tool: read_*
       actions: [read]
     - tool: http_fetch
       actions: [read]
@@ -15,6 +26,10 @@ writer_agent:
   permissions:
     - tool: read_file
       actions: [read]
+      path_pattern: "src/**"
+    - tool: read_file
+      actions: [read]
+      path_pattern: "*.md"
   forbidden:
     - tool: "*"
       actions: [write, delete, execute]
@@ -22,6 +37,8 @@ writer_agent:
 reviewer_agent:
   permissions:
     - tool: read_file
+      actions: [read]
+    - tool: read_*
       actions: [read]
   forbidden:
     - tool: "*"
@@ -31,8 +48,12 @@ builder_agent:
   permissions:
     - tool: read_file
       actions: [read]
+    - tool: read_*
+      actions: [read]
     - tool: run_command
       actions: [execute]
   forbidden:
-    - tool: "*"
+    - tool: write_*
       actions: [write, delete]
+    - tool: delete_*
+      actions: [delete]

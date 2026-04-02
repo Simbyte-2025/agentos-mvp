@@ -12,6 +12,7 @@ from agentos.agents.base.agent_base import AgentContext, BaseAgent, ExecutionRes
 from agentos.llm.base import LLMClient
 from agentos.memory.long_term import LongTermMemory
 from agentos.memory.short_term import ShortTermMemory
+from agentos.memory.transcript import SessionTranscript
 from agentos.memory.working_state import WorkingStateStore
 from agentos.observability.logging import get_logger
 from agentos.prompts.base import COORDINATOR_PROMPT
@@ -84,12 +85,15 @@ class PlannerExecutorOrchestrator:
             ExecutionResult with aggregated results from all subtasks
         """
         rid = request_id or str(uuid.uuid4())
-        
+
         self.logger.info(
             "PlannerExecutorOrchestrator starting",
             extra={"request_id": rid, "session_id": session_id, "user_id": user_id, "task": task}
         )
-        
+
+        transcript = SessionTranscript(session_id)
+        transcript.append("system", f"Task started: {task}", metadata={"request_id": rid})
+
         # Add task to short-term memory
         self.short_term.add(session_id, f"USER: {task}")
         
@@ -130,7 +134,8 @@ class PlannerExecutorOrchestrator:
                     subtask.status = "success"
                     subtask.output = result.output
                     all_outputs.append(result.output)
-                    
+                    transcript.append("agent", f"Subtask {subtask.id} completed: {result.output}")
+
                     # Save to long-term memory
                     if result.output:
                         self.long_term.add(result.output, tags=["planner_executor", subtask.id])
@@ -224,7 +229,9 @@ class PlannerExecutorOrchestrator:
                 "replan_count": replan_count
             }
         )
-        
+
+        transcript.append("system", f"Task completed. Success={success}", metadata={"request_id": rid})
+
         return ExecutionResult(
             agent_name="planner_executor",
             success=success,
