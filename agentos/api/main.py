@@ -19,6 +19,7 @@ from agentos.orchestrators.sequential import SequentialOrchestrator
 from agentos.security.permissions import PermissionValidator, load_profiles
 from agentos.tools.base import BaseTool
 from agentos.observability.logging import get_logger
+from agentos.bootstrap.cleanup import register_cleanup
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -67,6 +68,12 @@ _permission_validator = PermissionValidator(_profiles)
 _short_term = ShortTermMemory(max_items=10)
 _working_state = WorkingStateStore(db_path=ROOT / "agentos_state.db")
 _long_term = LongTermMemory()
+
+# Registrar cleanups de recursos críticos
+if hasattr(_working_state, "close"):
+    register_cleanup(_working_state.close, "WorkingStateStore")
+if hasattr(_long_term, "close"):
+    register_cleanup(_long_term.close, "LongTermMemory")
 
 # Feature flags for orchestrator selection
 # Feature flags for orchestrator selection
