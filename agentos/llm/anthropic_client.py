@@ -26,8 +26,6 @@ def with_llm_retry(max_retries: int = 5):
                 except Exception as e:
                     last_error = e
                     status = getattr(e, "status_code", None)
-                    if isinstance(status, property):
-                        status = None
                     try:
                         status = int(status)
                     except (TypeError, ValueError):
@@ -55,11 +53,17 @@ def with_llm_retry(max_retries: int = 5):
 
 
 class AnthropicClient(LLMClient):
-    """LLM client backed by Anthropic Claude API.
+    """Cliente para Anthropic Claude API.
 
-    Requires the ``anthropic`` package to be installed.
-    The API key is read from the ``api_key`` argument or the
-    ``ANTHROPIC_API_KEY`` environment variable (handled by the SDK).
+    Configuración:
+    - api_key: API key de Anthropic (obligatorio para generate())
+    - model: Modelo a usar (default: claude-sonnet-4-6)
+    - max_tokens: Máximo de tokens en la respuesta (default: 4096)
+    - timeout: Timeout en segundos (default: 60)
+
+    Nota: Si api_key es None, el cliente se puede instanciar pero generate()
+    lanzará RuntimeError. Esto permite mantener la API viva y devolver
+    errores controlados en /run.
     """
 
     def __init__(
@@ -69,6 +73,14 @@ class AnthropicClient(LLMClient):
         max_tokens: int = 4096,
         timeout: int = 60,
     ):
+        """Inicializar cliente Anthropic.
+
+        Args:
+            api_key: API key de Anthropic (puede ser None)
+            model: Modelo a usar
+            max_tokens: Máximo de tokens en la respuesta
+            timeout: Timeout en segundos
+        """
         self.api_key = api_key
         self.model = model
         self.max_tokens = max_tokens
@@ -77,52 +89,85 @@ class AnthropicClient(LLMClient):
 
     @with_llm_retry()
     def generate(self, prompt: str) -> str:
-        """Generate text from a prompt using the Anthropic Messages API.
+        """Generar texto usando Anthropic Claude API.
 
         Args:
-            prompt: The input prompt.
+            prompt: Prompt de entrada
 
         Returns:
-            The generated text.
+            Texto generado por el LLM
 
         Raises:
-            ImportError: If the ``anthropic`` package is not installed.
-            ValueError: If the API key is missing or the response is empty.
+            RuntimeError: Si falta API key o hay error en la llamada
         """
+        if not self.api_key:
+            raise RuntimeError(
+                "ANTHROPIC_API_KEY no configurada. "
+                "Configure la variable de entorno ANTHROPIC_API_KEY para usar Anthropic."
+            )
+
         try:
             import anthropic
-        except ImportError as exc:
-            raise ImportError(
-                "The 'anthropic' package is required. Install it with: pip install anthropic"
-            ) from exc
+        except ImportError as e:
+            raise RuntimeError(
+                "Paquete 'anthropic' no instalado. Ejecute: pip install anthropic"
+            ) from e
 
-        kwargs: dict = {
-            "model": self.model,
-            "max_tokens": self.max_tokens,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        if self.api_key:
-            client = anthropic.Anthropic(api_key=self.api_key)
-        else:
-            client = anthropic.Anthropic()
-
-        self.logger.info(
-            "AnthropicClient.generate called",
-            extra={"model": self.model, "prompt_len": len(prompt)},
+        self.logger.debug(
+            "Anthropic API request",
+            extra={
+                "model": self.model,
+                "prompt_length": len(prompt),
+                "max_tokens": self.max_tokens,
+            },
         )
 
-        response = client.messages.create(**kwargs)
+        try:
+            client = anthropic.Anthropic(api_key=self.api_key, timeout=self.timeout)
 
-        if not response.content:
-            raise ValueError("Anthropic returned an empty response")
+            message = client.messages.create(
+                model=self.model,
+                max_tokens=self.max_tokens,
+                messages=[{"role": "user", "content": prompt}],
+            )
 
-        text = "".join(
-            block.text for block in response.content if hasattr(block, "text")
-        )
+            content_blocks = message.content
+            if not content_blocks:
+                raise RuntimeError(
+                    "Anthropic API response inválida: sin bloques de contenido."
+                )
 
-        self.logger.info(
-            "AnthropicClient.generate completed",
-            extra={"model": self.model, "response_len": len(text)},
-        )
+            text_parts = [
+                block.text
+                for block in content_blocks
+                if hasattr(block, "text")
+            ]
+            content = "".join(text_parts)
 
-        return text
+            if not content:
+                raise RuntimeError(
+                    f"Anthropic API response inválida: sin texto. "
+                    f"stop_reason={message.stop_reason}"
+                )
+
+            self.logger.debug(
+                "Anthropic API response received",
+                extra={
+                    "response_length": len(content),
+                    "stop_reason": message.stop_reason,
+                    "input_tokens": message.usage.input_tokens,
+                    "output_tokens": message.usage.output_tokens,
+                },
+            )
+
+            return content
+
+        except RuntimeError:
+            raise
+
+        except Exception as e:
+            self.logger.error(
+                "Anthropic API error inesperado",
+                extra={"error": str(e), "error_type": type(e).__name__},
+            )
+            raise RuntimeError(f"Anthropic API error inesperado: {e}") from e

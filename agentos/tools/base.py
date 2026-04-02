@@ -49,6 +49,13 @@ class BaseTool(ABC):
         """Return True if this tool call is read-only (no side effects)."""
         return getattr(self, "risk", "") == "read"
 
+    def dispatch(self, tool_input: ToolInput) -> ToolOutput:
+        """Validate then execute. Preferred entry point over calling execute() directly."""
+        validation = self.validate(tool_input)
+        if not validation.valid:
+            return ToolOutput(success=False, error=validation.error or "Validación fallida")
+        return self.execute(tool_input)
+
     @abstractmethod
     def execute(self, tool_input: ToolInput) -> ToolOutput:
         raise NotImplementedError

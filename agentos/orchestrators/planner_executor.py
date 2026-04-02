@@ -82,16 +82,8 @@ class PlannerExecutorOrchestrator:
             ExecutionResult with aggregated results from all subtasks
         """
         rid = request_id or str(uuid.uuid4())
-        
-        self.logger.info(
-            "PlannerExecutorOrchestrator starting",
-            extra={"request_id": rid, "session_id": session_id, "user_id": user_id, "task": task}
-        )
-        
-        # Add task to short-term memory
-        self.short_term.add(session_id, f"USER: {task}")
 
-        # Restore previous conversation history from SQLite
+        # Restaurar historial previo
         try:
             history = self.working_state.load_checkpoint(session_id, "conversation_history")
             if history and isinstance(history, dict):
@@ -99,6 +91,14 @@ class PlannerExecutorOrchestrator:
                     self.short_term.add(session_id, msg)
         except Exception:
             pass
+
+        self.logger.info(
+            "PlannerExecutorOrchestrator starting",
+            extra={"request_id": rid, "session_id": session_id, "user_id": user_id, "task": task}
+        )
+        
+        # Add task to short-term memory
+        self.short_term.add(session_id, f"USER: {task}")
 
         # Initial planning
         subtasks = self._plan(task, rid, session_id)
@@ -219,22 +219,21 @@ class PlannerExecutorOrchestrator:
             created_at=datetime.now(timezone.utc).isoformat(),
         )
         
-        # Persist conversation history to SQLite for cross-restart continuity
+        # Add to short-term memory
+        self.short_term.add(session_id, f"AGENT(planner_executor): {final_output}")
+
+        # Persistir historial de conversación
         try:
             messages = self.short_term.get(session_id)
             if messages:
                 self.working_state.save_checkpoint(
-                    session_id=session_id,
-                    name="conversation_history",
-                    data={"messages": list(messages)},
-                    created_at=datetime.now(timezone.utc).isoformat(),
+                    session_id, "conversation_history",
+                    {"messages": list(messages)},
+                    datetime.now(timezone.utc).isoformat(),
                 )
         except Exception:
             pass
 
-        # Add to short-term memory
-        self.short_term.add(session_id, f"AGENT(planner_executor): {final_output}")
-        
         self.logger.info(
             "PlannerExecutorOrchestrator completed",
             extra={
