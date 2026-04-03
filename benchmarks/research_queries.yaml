@@ -1,0 +1,70 @@
+queries:
+  - id: RQ-01
+    domain: automatizacion_notion
+    query: "¿Cuáles son los patrones más confiables para sincronización bidireccional entre Notion y GitHub Actions en 2026, considerando rate limits de la API de Notion y manejo de conflictos?"
+    fase5_critical_questions:
+      - "¿Qué webhook usar para trigger en Notion?"
+      - "¿Cómo manejar el caso de edición simultánea?"
+
+  - id: RQ-02
+    domain: agentes_ia
+    query: "¿Cómo implementar memoria persistente en un agente basado en Claude API que maneje múltiples proyectos en paralelo sin contaminación de contexto entre hilos?"
+    fase5_critical_questions:
+      - "¿ChromaDB o alternativa para persistencia?"
+      - "¿Cómo aislar contexto por proyecto?"
+
+  - id: RQ-03
+    domain: agentes_ia
+    query: "¿Cuál es el estado actual de tool use en Claude Sonnet 4.6 vs GPT-4o para pipelines de agentes multi-step? ¿Qué falla más frecuentemente y cómo se mitiga?"
+    fase5_critical_questions:
+      - "¿Qué modelo usar para cada fase del pipeline?"
+      - "¿Cómo manejar tool call failures?"
+
+  - id: RQ-04
+    domain: generacion_musical
+    query: "¿Qué modelos y APIs permiten generación musical condicionada a estructura armónica específica (ej: progresiones jazz) en Python en 2026?"
+    fase5_critical_questions:
+      - "¿Qué API usar para prototipo inicial?"
+      - "¿Cómo especificar progresión armónica?"
+
+  - id: RQ-05
+    domain: automatizacion_notion
+    query: "¿Cómo diseñar un sistema de webhooks en Notion que dispare agentes de IA para procesamiento automático de nuevas entradas en una base de datos, con manejo de errores y retry?"
+    fase5_critical_questions:
+      - "¿Notion soporta webhooks nativos en 2026?"
+      - "¿Cuál es el patrón de retry recomendado?"
+
+  - id: RQ-06
+    domain: infraestructura
+    query: "¿Cuáles son las opciones más simples para desplegar un agente FastAPI en producción desde Chile con latencia aceptable, costo bajo y sin DevOps complejo?"
+    fase5_critical_questions:
+      - "¿Railway, Fly.io, o CloudFlare Workers?"
+      - "¿Cómo manejar secretos en cada opción?"
+
+  - id: RQ-07
+    domain: agentes_ia
+    query: "¿Cómo implementar un loop de validación humana (human-in-the-loop) en un pipeline de agentes que sea interrumpible, reanudable y que persista el estado entre sesiones?"
+    fase5_critical_questions:
+      - "¿Cómo serializar estado del agente?"
+      - "¿Dónde persiste el punto de reanudación?"
+
+  - id: RQ-08
+    domain: micro_web
+    query: "¿Cuál es el stack mínimo viable para una micro-web con autenticación, base de datos y API REST mantenible por un solo desarrollador en 2026?"
+    fase5_critical_questions:
+      - "¿SQLite o Postgres para solo developer?"
+      - "¿Qué auth library usar?"
+
+  - id: RQ-09
+    domain: automatizacion_educacion
+    query: "¿Qué herramientas de IA permiten automatizar generación de reportes académicos en Chile considerando RUT, sistema de notas chileno y formatos del MINEDUC?"
+    fase5_critical_questions:
+      - "¿Qué formato de output acepta MINEDUC?"
+      - "¿Cómo validar RUT en el pipeline?"
+
+  - id: RQ-10
+    domain: agentes_ia
+    query: "¿Cómo estructurar el system prompt de un agente planificador para que produzca planes ejecutables con responsables, herramientas y prompts de ejecución prediseñados, minimizando alucinaciones en la asignación de herramientas?"
+    fase5_critical_questions:
+      - "¿Qué estructura de JSON para el plan?"
+      - "¿Cómo validar que las tools asignadas existen?"

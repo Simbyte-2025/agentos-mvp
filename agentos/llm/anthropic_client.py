@@ -33,15 +33,20 @@ def with_llm_retry(max_retries: int = 5):
                     if status not in RETRYABLE_STATUS:
                         raise
                     if attempt > max_retries:
-                        raise
+                        raise last_error
                     retry_after = None
                     try:
                         retry_after = e.response.headers.get("retry-after")
-                    except Exception:
+                    except (AttributeError, TypeError, ValueError):
                         pass
                     if retry_after:
-                        delay = float(retry_after)
+                        try:
+                            delay = float(retry_after)
+                        except (TypeError, ValueError):
+                            delay = None
                     else:
+                        delay = None
+                    if not delay:
                         base = min(0.5 * (2 ** (attempt - 1)), 32)
                         delay = base + random.random() * 0.25 * base
                     time.sleep(delay)
