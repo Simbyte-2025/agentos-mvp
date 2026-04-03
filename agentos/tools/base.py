@@ -6,6 +6,15 @@ from typing import Any, Dict, Optional
 from pydantic import BaseModel, Field
 
 
+class ValidationResult:
+    """Result of a tool input validation check."""
+
+    def __init__(self, valid: bool, error: Optional[str] = None, behavior: str = "deny"):
+        self.valid = valid
+        self.error = error
+        self.behavior = behavior  # "deny" | "ask" | "allow"
+
+
 class ToolInput(BaseModel):
     """Input estándar para tools."""
 
@@ -22,13 +31,6 @@ class ToolOutput(BaseModel):
     meta: Dict[str, Any] = Field(default_factory=dict)
 
 
-class ValidationResult:
-    def __init__(self, valid: bool, error=None, behavior: str = "deny"):
-        self.valid = valid
-        self.error = error
-        self.behavior = behavior
-
-
 class BaseTool(ABC):
     name: str
     description: str
@@ -39,13 +41,16 @@ class BaseTool(ABC):
         self.description = description
         self.risk = risk
 
-    def validate(self, tool_input) -> 'ValidationResult':
+    def validate(self, tool_input) -> ValidationResult:
+        """Validate tool input before execution. Override to add custom checks."""
         return ValidationResult(valid=True)
 
     def is_read_only(self, tool_input=None) -> bool:
-        return getattr(self, 'risk', '') == 'read'
+        """Return True if this tool call is read-only (no side effects)."""
+        return getattr(self, "risk", "") == "read"
 
     def dispatch(self, tool_input: ToolInput) -> ToolOutput:
+        """Validate then execute. Preferred entry point over calling execute() directly."""
         validation = self.validate(tool_input)
         if not validation.valid:
             return ToolOutput(success=False, error=validation.error or "Validación fallida")

@@ -99,7 +99,7 @@ class PlannerExecutorOrchestrator:
         
         # Add task to short-term memory
         self.short_term.add(session_id, f"USER: {task}")
-        
+
         # Initial planning
         subtasks = self._plan(task, rid, session_id)
         
