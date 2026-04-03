@@ -14,6 +14,8 @@ from agentos.memory.long_term import LongTermMemory
 from agentos.memory.short_term import ShortTermMemory
 from agentos.memory.working_state import WorkingStateStore
 from agentos.observability.logging import get_logger
+from agentos.prompts.base import COORDINATOR_PROMPT
+from agentos.prompts.sections import PromptSection, build_system_prompt
 from agentos.security.permissions import PermissionValidator
 from agentos.tools.base import BaseTool
 
@@ -271,7 +273,8 @@ class PlannerExecutorOrchestrator:
         context_items = [it.text for it in retrieved]
         
         # Build planning prompt
-        prompt = self._build_planning_prompt(task, context_items)
+        context_str = "\n".join(f"- {c}" for c in context_items[:3]) if context_items else ""
+        prompt = self._build_planning_prompt(task, context_str)
         
         try:
             # Generate plan using LLM
@@ -378,7 +381,7 @@ class PlannerExecutorOrchestrator:
             ExecutionResult from the agent execution
         """
         subtask.status = "running"
-        
+
         self.logger.info(
             "Executing subtask",
             extra={
@@ -387,62 +390,82 @@ class PlannerExecutorOrchestrator:
                 "objetivo": subtask.objetivo
             }
         )
-        
-        # Select agent for this subtask
-        agent = self.agent_router.select_agent(subtask.objetivo, self.agents)
-        
-        if agent is None:
+
+        try:
+            # Select agent for this subtask
+            agent = self.agent_router.select_agent(subtask.objetivo, self.agents)
+
+            if agent is None:
+                return ExecutionResult(
+                    agent_name="none",
+                    success=False,
+                    output="",
+                    error="No hay agentes cargados"
+                )
+
+            # Select tools for this subtask
+            selected_tools = self.tool_router.select_tools(
+                subtask.objetivo,
+                agent.profile,
+                self.tools,
+                self.permission_validator
+            )
+            tool_map: Mapping[str, BaseTool] = {t.name: t for t in selected_tools}
+
+            # Build context
+            ctx = AgentContext(
+                request_id=request_id,
+                session_id=session_id,
+                user_id=user_id,
+                tools=tool_map,
+                memory={
+                    "short_term": self.short_term.get(session_id),
+                    "retrieved": [],
+                    "original_task": original_task,
+                    "subtask_objetivo": subtask.objetivo,
+                    "criterios_exito": subtask.criterios_exito,
+                    "llm_client": self.llm_client,
+                },
+                logger=self.logger,
+            )
+
+            # Execute
+            result = agent.execute(subtask.objetivo, ctx)
+
+            # Track tool calls if available
+            if result.meta and "tool_calls" in result.meta:
+                subtask.tool_calls = result.meta["tool_calls"]
+
+            self.logger.info(
+                "Subtask execution completed",
+                extra={
+                    "request_id": request_id,
+                    "subtask_id": subtask.id,
+                    "success": result.success,
+                    "agent": result.agent_name
+                }
+            )
+
+            return result
+
+        except Exception as e:
+            self.logger.error(
+                f"Subtask {subtask.id} raised: {e}",
+                extra={"request_id": request_id, "subtask_id": subtask.id}
+            )
             return ExecutionResult(
-                agent_name="none",
+                agent_name="error",
                 success=False,
                 output="",
-                error="No hay agentes cargados"
+                error=str(e)
             )
-        
-        # Select tools for this subtask
-        selected_tools = self.tool_router.select_tools(
-            subtask.objetivo,
-            agent.profile,
-            self.tools,
-            self.permission_validator
-        )
-        tool_map: Mapping[str, BaseTool] = {t.name: t for t in selected_tools}
-        
-        # Build context
-        ctx = AgentContext(
-            request_id=request_id,
-            session_id=session_id,
-            user_id=user_id,
-            tools=tool_map,
-            memory={
-                "short_term": self.short_term.get(session_id),
-                "retrieved": [],
-                "original_task": original_task,
-                "subtask_objetivo": subtask.objetivo,
-                "criterios_exito": subtask.criterios_exito,
-                "llm_client": self.llm_client,
-            },
-            logger=self.logger,
-        )
-        
-        # Execute
-        result = agent.execute(subtask.objetivo, ctx)
-        
-        # Track tool calls if available
-        if result.meta and "tool_calls" in result.meta:
-            subtask.tool_calls = result.meta["tool_calls"]
-        
-        self.logger.info(
-            "Subtask execution completed",
-            extra={
-                "request_id": request_id,
-                "subtask_id": subtask.id,
-                "success": result.success,
-                "agent": result.agent_name
-            }
-        )
-        
-        return result
+
+        finally:
+            self._cleanup_subtask_resources(subtask)
+
+    def _cleanup_subtask_resources(self, subtask: Subtask) -> None:
+        """Hook de cleanup por subtask. Override para recursos específicos."""
+        pass  # extensible sin romper subclases
 
     def _execute_as_single_task(
         self,
@@ -561,41 +584,38 @@ class PlannerExecutorOrchestrator:
             )
             raise
 
-    def _build_planning_prompt(self, task: str, context: List[str]) -> str:
-        """Build prompt for initial planning.
-        
+    def _build_planning_prompt(self, task: str, context_str: str = "") -> str:
+        """Build prompt for initial planning using PromptSection composition.
+
         Args:
             task: The task to plan
-            context: Relevant context from long-term memory
-            
+            context_str: Pre-formatted context string from long-term memory
+
         Returns:
             Formatted prompt string
         """
-        context_str = "\n".join(f"- {c}" for c in context[:3]) if context else "Ninguno"
-        
-        return f"""Eres un planificador de tareas. Descompón la siguiente tarea en subtareas ejecutables.
+        sections = [
+            PromptSection("coordinator_role", lambda: COORDINATOR_PROMPT, cached=True),
+            PromptSection("available_agents", lambda: self._get_agents_context(), cached=True),
+            PromptSection("task", lambda t=task: f"## Tarea a planificar\n{t}", cached=False),
+            PromptSection("context", lambda c=context_str: f"## Contexto relevante\n{c}" if c else None, cached=False),
+            PromptSection("output_format", lambda: (
+                "## Formato de respuesta\n"
+                "Responde SOLO con JSON válido:\n"
+                '{"subtasks": [{"id": "st_1", "objetivo": "...", "agente": "nombre_agente", "dependencias": []}]}'
+            ), cached=True),
+        ]
+        return build_system_prompt(sections)
 
-Tarea: {task}
-
-Contexto relevante:
-{context_str}
-
-Responde SOLO con un JSON válido en este formato exacto:
-{{
-  "subtasks": [
-    {{
-      "id": "1",
-      "objetivo": "descripción clara de la subtarea",
-      "criterios_exito": ["criterio 1", "criterio 2"]
-    }}
-  ]
-}}
-
-Reglas:
-- Cada subtarea debe ser específica y ejecutable
-- Los IDs deben ser únicos
-- Incluye 1-5 subtareas máximo
-- NO incluyas texto adicional fuera del JSON"""
+    def _get_agents_context(self) -> str:
+        """Describe los agentes disponibles para el coordinator."""
+        try:
+            agent_names = [a.profile.name for a in self.agents] if self.agents else []
+            if agent_names:
+                return "## Agentes disponibles\n" + "\n".join(f"- {name}" for name in agent_names)
+        except Exception:
+            pass
+        return ""
 
     def _build_replanning_prompt(
         self,
