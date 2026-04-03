@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional
@@ -24,9 +25,19 @@ class AgentContext:
     tools: Mapping[str, BaseTool]
     memory: Any
     logger: Any
+    abort_event: Optional[threading.Event] = None
+
+    def is_aborted(self) -> bool:
+        return self.abort_event is not None and self.abort_event.is_set()
+
+    def abort(self) -> None:
+        if self.abort_event:
+            self.abort_event.set()
 
 
 class BaseAgent(ABC):
+    max_turns: int = 10  # límite de turns por ejecución
+
     def __init__(self, name: str, description: str, profile: str):
         self.name = name
         self.description = description

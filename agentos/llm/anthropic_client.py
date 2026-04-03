@@ -1,4 +1,4 @@
-"""Anthropic Claude LLM client implementation."""
+"""Anthropic Claude LLM client with retry logic."""
 
 from __future__ import annotations
 
@@ -13,7 +13,9 @@ from agentos.observability.logging import get_logger
 RETRYABLE_STATUS = {429, 529, 408, 409, 500, 502, 503, 504}
 
 
-def with_llm_retry(max_retries=5):
+def with_llm_retry(max_retries: int = 5):
+    """Decorator that retries LLM calls on transient errors with exponential backoff."""
+
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -22,23 +24,36 @@ def with_llm_retry(max_retries=5):
                 try:
                     return func(*args, **kwargs)
                 except Exception as e:
-                    status = getattr(e, 'status_code', None)
+                    last_error = e
+                    status = getattr(e, "status_code", None)
+                    try:
+                        status = int(status)
+                    except (TypeError, ValueError):
+                        status = None
                     if status not in RETRYABLE_STATUS:
                         raise
-                    last_error = e
                     if attempt > max_retries:
                         raise last_error
-                    delay = None
+                    retry_after = None
                     try:
-                        raw = e.response.headers.get("retry-after")
-                        delay = float(raw) if raw else None
+                        retry_after = e.response.headers.get("retry-after")
                     except (AttributeError, TypeError, ValueError):
+                        pass
+                    if retry_after:
+                        try:
+                            delay = float(retry_after)
+                        except (TypeError, ValueError):
+                            delay = None
+                    else:
                         delay = None
                     if not delay:
                         base = min(0.5 * (2 ** (attempt - 1)), 32)
                         delay = base + random.random() * 0.25 * base
                     time.sleep(delay)
+            raise last_error
+
         return wrapper
+
     return decorator
 
 
@@ -121,7 +136,6 @@ class AnthropicClient(LLMClient):
                 messages=[{"role": "user", "content": prompt}],
             )
 
-            # Extraer texto de la respuesta
             content_blocks = message.content
             if not content_blocks:
                 raise RuntimeError(
