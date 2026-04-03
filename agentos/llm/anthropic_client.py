@@ -17,6 +17,7 @@ def with_llm_retry(max_retries=5):
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
+            last_error = None
             for attempt in range(1, max_retries + 2):
                 try:
                     return func(*args, **kwargs)
@@ -24,12 +25,14 @@ def with_llm_retry(max_retries=5):
                     status = getattr(e, 'status_code', None)
                     if status not in RETRYABLE_STATUS:
                         raise
+                    last_error = e
                     if attempt > max_retries:
-                        raise
+                        raise last_error
+                    delay = None
                     try:
-                        ra = e.response.headers.get("retry-after")
-                        delay = float(ra) if ra else None
-                    except Exception:
+                        raw = e.response.headers.get("retry-after")
+                        delay = float(raw) if raw else None
+                    except (AttributeError, TypeError, ValueError):
                         delay = None
                     if not delay:
                         base = min(0.5 * (2 ** (attempt - 1)), 32)
