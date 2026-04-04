@@ -1,5 +1,6 @@
 """MCP integration exceptions."""
 
+from typing import Optional
 
 class MCPError(Exception):
     """Base exception for MCP operations."""
@@ -19,7 +20,7 @@ class MCPConnectionError(MCPError):
 class MCPResponseError(MCPError):
     """Raised when server returns an error response."""
     
-    def __init__(self, message: str, code: int | None = None, data: dict | None = None):
+    def __init__(self, message: str, code: Optional[int] = None, data: Optional[dict] = None):
         super().__init__(message)
         self.code = code
         self.data = data

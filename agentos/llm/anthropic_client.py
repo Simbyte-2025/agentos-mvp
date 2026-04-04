@@ -74,6 +74,7 @@ class AnthropicClient(LLMClient):
     def __init__(
         self,
         api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
         model: str = "claude-sonnet-4-6",
         max_tokens: int = 4096,
         timeout: int = 60,
@@ -86,7 +87,9 @@ class AnthropicClient(LLMClient):
             max_tokens: Máximo de tokens en la respuesta
             timeout: Timeout en segundos
         """
-        self.api_key = api_key
+        import os
+        self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
+        self.base_url = base_url or os.getenv("ANTHROPIC_BASE_URL")
         self.model = model
         self.max_tokens = max_tokens
         self.timeout = timeout
@@ -128,7 +131,10 @@ class AnthropicClient(LLMClient):
         )
 
         try:
-            client = anthropic.Anthropic(api_key=self.api_key, timeout=self.timeout)
+            kwargs = {"api_key": self.api_key, "timeout": self.timeout}
+            if self.base_url:
+                kwargs["base_url"] = self.base_url
+            client = anthropic.Anthropic(**kwargs)
 
             message = client.messages.create(
                 model=self.model,

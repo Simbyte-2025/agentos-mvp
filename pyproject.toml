@@ -8,6 +8,8 @@ version = "0.1.0"
 description = "AgentOS MVP (local/cloud)"
 requires-python = ">=3.11"
 dependencies = [
+    "anthropic>=0.7.0",
+    "chromadb>=0.4.0",
   "fastapi>=0.110",
   "uvicorn[standard]>=0.27",
   "pydantic>=2.0",

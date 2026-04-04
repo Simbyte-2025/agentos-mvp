@@ -14,17 +14,18 @@ Sistema de orquestación de agentes con mínimo privilegio y aislamiento de herr
 ```
 agentos_mvp/
 ├── agentos/
-│   ├── orchestrator/      # Planner-Executor orchestrator
-│   ├── tools/             # Herramientas disponibles
-│   │   ├── filesystem/    # read_file
-│   │   ├── http/          # http_fetch
-│   │   └── exec/          # run_command (secure execution)
+│   ├── orchestrators/     # Planner-Executor y sequential
+│   ├── agents/            # Especialistas (researcher, writer, builder)
+│   ├── tools/             # Herramientas disponibles (fs, http, exec)
 │   ├── security/          # Validación de permisos y allowlists
+│   ├── memory/            # Memoria a corto y largo plazo (Working state, LTM)
+│   ├── llm/               # Integración con Anthropic Claude y Minimax
 │   └── api/               # FastAPI endpoints
 ├── config/
 │   ├── tools.yaml         # Configuración de herramientas
-│   └── profiles.yaml      # Perfiles de permisos por agente
-├── docs/                  # ADRs y especificaciones
+│   ├── profiles.yaml      # Perfiles de permisos por agente
+│   └── agents.yaml        # Definición de agentes
+├── docs/                  # ADRs, guías arquitectónicas y auditorías completas
 └── tests/                 # Unit + integration tests
 ```
 
@@ -32,22 +33,22 @@ agentos_mvp/
 
 ### 1. Instalar dependencias
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -e .
 ```
 
 ### 2. Ejecutar tests
 
-```powershell
-.\.venv\Scripts\pytest -v
+```bash
+pytest -v
 ```
 
 ### 3. Iniciar API
 
-```powershell
-.\.venv\Scripts\uvicorn agentos.api.main:app --reload
+```bash
+uvicorn agentos.api.main:app --reload
 ```
 
 ### 4. Health check
