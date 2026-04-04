@@ -55,7 +55,11 @@ def bootstrap_tools() -> List[BaseTool]:
     tools: List[BaseTool] = []
     for t in tools_cfg:
         cls = import_class(t["class_path"])
-        tools.append(cls())
+        tool_config = t.get("config")
+        if tool_config:
+            tools.append(cls(config=tool_config))
+        else:
+            tools.append(cls())
     return tools
 
 
