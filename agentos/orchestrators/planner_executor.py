@@ -8,16 +8,23 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional
 
+import time
+
 from agentos.agents.base.agent_base import AgentContext, BaseAgent, ExecutionResult
 from agentos.llm.base import LLMClient
+from agentos.memory.compaction import ContextCompactor
 from agentos.memory.long_term import LongTermMemory
+from agentos.memory.session_transcript import SessionTranscript
 from agentos.memory.short_term import ShortTermMemory
 from agentos.memory.working_state import WorkingStateStore
 from agentos.observability.logging import get_logger
+from agentos.observability.metrics import MetricsCollector
 from agentos.prompts.base import COORDINATOR_PROMPT
 from agentos.prompts.sections import PromptSection, build_system_prompt
+from agentos.security.denial_tracking import DenialTracker
 from agentos.security.permissions import PermissionValidator
 from agentos.tools.base import BaseTool
+from agentos.tools.executor import ToolExecutor
 
 from .router import AgentRouter, ToolRouter
 
@@ -32,6 +39,7 @@ class Subtask:
     id: str
     objetivo: str
     criterios_exito: List[str]
+    dependencies: List[str] = field(default_factory=list)
     status: str = "pending"  # pending, running, success, failed
     error: Optional[str] = None
     output: Optional[str] = None
@@ -59,6 +67,9 @@ class PlannerExecutorOrchestrator:
         working_state: WorkingStateStore,
         long_term: LongTermMemory,
         llm_client: LLMClient,
+        metrics: Optional[MetricsCollector] = None,
+        denial_tracker: Optional[DenialTracker] = None,
+        tool_executor: Optional[ToolExecutor] = None,
     ):
         self.agents = agents
         self.tools = tools
@@ -67,8 +78,12 @@ class PlannerExecutorOrchestrator:
         self.working_state = working_state
         self.long_term = long_term
         self.llm_client = llm_client
+        self.metrics = metrics or MetricsCollector()
+        self.denial_tracker = denial_tracker or DenialTracker()
+        self.tool_executor = tool_executor or ToolExecutor()
         self.agent_router = AgentRouter()
         self.tool_router = ToolRouter(top_k=3)
+        self.compactor = ContextCompactor()
         self.logger = get_logger("agentos")
 
     def run(self, task: str, session_id: str, user_id: str, request_id: str | None = None) -> ExecutionResult:
@@ -84,6 +99,12 @@ class PlannerExecutorOrchestrator:
             ExecutionResult with aggregated results from all subtasks
         """
         rid = request_id or str(uuid.uuid4())
+        start = time.monotonic()
+        self.metrics.record_request()
+
+        # Session transcript persistence
+        transcript = SessionTranscript(session_id)
+        transcript.append("user", task)
 
         # Restaurar historial previo
         try:
@@ -223,6 +244,29 @@ class PlannerExecutorOrchestrator:
         
         # Add to short-term memory
         self.short_term.add(session_id, f"AGENT(planner_executor): {final_output}")
+
+        # Session transcript
+        transcript.append("agent", final_output or "", meta={
+            "agent": "planner_executor",
+            "success": success,
+            "subtask_count": len(subtasks),
+            "replan_count": replan_count,
+        })
+
+        # Metrics
+        duration_ms = (time.monotonic() - start) * 1000
+        if success:
+            self.metrics.record_success(duration_ms=duration_ms)
+        else:
+            self.metrics.record_error(final_error or "ORCHESTRATION_FAILED")
+
+        # Compaction check
+        messages = self.short_term.get(session_id)
+        if self.compactor.should_trim(messages):
+            compacted = self.compactor.trim_tool_results(messages)
+            self.short_term._data[session_id].clear()
+            for msg in compacted:
+                self.short_term._data[session_id].append(msg)
 
         # Persistir historial de conversación
         try:
@@ -403,11 +447,20 @@ class PlannerExecutorOrchestrator:
                     error="No hay agentes cargados"
                 )
 
-            # Select tools for this subtask
+            # Select tools for this subtask with denial tracking
+            selected_tools: List[BaseTool] = []
+            for t in self.tools:
+                decision = self.permission_validator.validate_tool_access(agent.profile, t.name, t.risk)
+                if decision.allowed:
+                    selected_tools.append(t)
+                    self.denial_tracker.record_success(session_id)
+                else:
+                    self.denial_tracker.record_denial(session_id, t.name, t.risk)
+
             selected_tools = self.tool_router.select_tools(
                 subtask.objetivo,
                 agent.profile,
-                self.tools,
+                selected_tools,
                 self.permission_validator
             )
             tool_map: Mapping[str, BaseTool] = {t.name: t for t in selected_tools}
@@ -559,10 +612,17 @@ class PlannerExecutorOrchestrator:
                 if not isinstance(criterios_exito, list):
                     criterios_exito = [str(criterios_exito)]
                 
+                # Parse dependencies if present
+                deps = st_data.get("dependencias", st_data.get("dependencies", []))
+                if not isinstance(deps, list):
+                    deps = []
+                deps = [str(d) for d in deps]
+
                 subtasks.append(Subtask(
                     id=subtask_id,
                     objetivo=objetivo,
-                    criterios_exito=criterios_exito
+                    criterios_exito=criterios_exito,
+                    dependencies=deps,
                 ))
             
             if not subtasks:
@@ -583,6 +643,38 @@ class PlannerExecutorOrchestrator:
                 extra={"request_id": request_id, "error": str(e)}
             )
             raise
+
+    @staticmethod
+    def _build_execution_order(subtasks: List[Subtask]) -> List[List[Subtask]]:
+        """Topological sort of subtasks into execution layers.
+
+        Returns a list of layers. Subtasks within the same layer have all
+        dependencies satisfied and can run concurrently. If there are
+        circular or unresolvable dependencies, remaining subtasks are
+        appended as a final layer (best-effort).
+        """
+        by_id = {st.id: st for st in subtasks}
+        remaining = set(by_id.keys())
+        completed_ids: set = set()
+        layers: List[List[Subtask]] = []
+
+        while remaining:
+            # Find subtasks whose deps are all completed
+            ready = [
+                sid for sid in remaining
+                if all(d in completed_ids or d not in by_id for d in by_id[sid].dependencies)
+            ]
+            if not ready:
+                # Circular / unresolvable — dump remaining into last layer
+                layers.append([by_id[sid] for sid in sorted(remaining)])
+                break
+            layer = [by_id[sid] for sid in ready]
+            layers.append(layer)
+            for sid in ready:
+                remaining.discard(sid)
+                completed_ids.add(sid)
+
+        return layers
 
     def _build_planning_prompt(self, task: str, context_str: str = "") -> str:
         """Build prompt for initial planning using PromptSection composition.

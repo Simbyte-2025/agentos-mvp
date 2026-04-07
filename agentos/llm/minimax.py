@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Optional
 
 import httpx
@@ -13,13 +14,14 @@ from agentos.observability.logging import get_logger
 
 class MinimaxClient(LLMClient):
     """Cliente para Minimax AI API.
-    
+
     Configuración:
-    - api_key: API key de Minimax (obligatorio para generate())
-    - base_url: URL base de la API (default: https://api.minimax.io)
-    - model: Modelo a usar (default: MiniMax-M2.1)
+    - api_key: Token/API key de MiniMax (obligatorio para generate())
+    - base_url: URL base Anthropic-compatible de la API
+      (default: https://api.minimaxi.com/anthropic)
+    - model: Modelo a usar (default: MiniMax-M2.7)
     - timeout: Timeout en segundos (default: 30)
-    
+
     Nota: Si api_key es None, el cliente se puede instanciar pero generate()
     lanzará RuntimeError. Esto permite mantener la API viva y devolver
     errores controlados en /run.
@@ -28,49 +30,53 @@ class MinimaxClient(LLMClient):
     def __init__(
         self,
         api_key: Optional[str] = None,
-        base_url: str = "https://api.minimax.io",
-        model: str = "MiniMax-M2.1",
+        base_url: str = "https://api.minimaxi.com/anthropic",
+        model: str = "MiniMax-M2.7",
         timeout: int = 30,
     ):
         """Inicializar cliente Minimax.
-        
+
         Args:
-            api_key: API key de Minimax (puede ser None)
-            base_url: URL base de la API
+            api_key: Token/API key de MiniMax (puede ser None)
+            base_url: URL base de la API Anthropic-compatible
             model: Modelo a usar
             timeout: Timeout en segundos
         """
-        self.api_key = api_key
-        self.base_url = base_url.rstrip("/")
-        self.model = model
+        resolved_api_key = api_key or os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ANTHROPIC_API_KEY")
+        resolved_base_url = os.getenv("ANTHROPIC_BASE_URL", base_url)
+        resolved_model = os.getenv("ANTHROPIC_MODEL", model)
+
+        self.api_key = resolved_api_key
+        self.base_url = resolved_base_url.rstrip("/")
+        self.model = resolved_model
         self.timeout = timeout
         self.logger = get_logger("agentos")
 
     def generate(self, prompt: str) -> str:
         """Generar texto usando Minimax API (Anthropic-compatible).
-        
+
         Args:
             prompt: Prompt de entrada
-            
+
         Returns:
             Texto generado por el LLM
-            
+
         Raises:
             RuntimeError: Si falta API key o hay error en la llamada
         """
         # Validar que tenemos API key
         if not self.api_key:
             raise RuntimeError(
-                "MINIMAX_API_KEY no configurada. "
-                "Configure la variable de entorno MINIMAX_API_KEY para usar Minimax."
+                "No hay credencial MiniMax configurada. "
+                "Configure MINIMAX_API_KEY o ANTHROPIC_AUTH_TOKEN para usar MiniMax."
             )
-        
+
         # Construir URL del endpoint (Anthropic-compatible Messages API)
         url = f"{self.base_url}/v1/messages"
-        
+
         # Headers (sin loggear el API key)
         headers = {
-            "x-api-key": self.api_key,
+            "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
             "anthropic-version": "2023-06-01",
         }
@@ -97,7 +103,9 @@ class MinimaxClient(LLMClient):
             "Minimax API request (Anthropic-compatible)",
             extra={
                 "url": url,
+                "base_url": self.base_url,
                 "model": self.model,
+                "auth_scheme": "Bearer",
                 "prompt_length": len(prompt),
             }
         )

@@ -14,7 +14,7 @@ class ShortTermMemory:
     dicts ya estructurados.
     """
 
-    def __init__(self, max_items: int = 10):
+    def __init__(self, max_items: int = 50):
         self.max_items = max_items
         self._data: Dict[str, Deque[Any]] = defaultdict(lambda: deque(maxlen=max_items))
 

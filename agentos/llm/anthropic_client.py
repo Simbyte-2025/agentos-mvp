@@ -1,74 +1,32 @@
-"""Anthropic Claude LLM client with retry logic."""
+"""Anthropic Claude LLM client with robust retry logic.
+
+Refactored to:
+- Reuse the anthropic.Anthropic() client instance (not per-call)
+- Use the centralized retry engine (llm/retry.py)
+- Support fallback_model and abort_event
+- Use structured errors from agentos.errors
+"""
 
 from __future__ import annotations
 
-import random
-import time
-from functools import wraps
+import os
+import threading
 from typing import Optional
 
+from agentos.errors import AuthenticationError, ConfigurationError
 from agentos.llm.base import LLMClient
+from agentos.llm.cache import PromptCache
+from agentos.llm.retry import RetryPolicy, RetryState, retry_llm_call
 from agentos.observability.logging import get_logger
-
-RETRYABLE_STATUS = {429, 529, 408, 409, 500, 502, 503, 504}
-
-
-def with_llm_retry(max_retries: int = 5):
-    """Decorator that retries LLM calls on transient errors with exponential backoff."""
-
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            last_error = None
-            for attempt in range(1, max_retries + 2):
-                try:
-                    return func(*args, **kwargs)
-                except Exception as e:
-                    last_error = e
-                    status = getattr(e, "status_code", None)
-                    try:
-                        status = int(status)
-                    except (TypeError, ValueError):
-                        status = None
-                    if status not in RETRYABLE_STATUS:
-                        raise
-                    if attempt > max_retries:
-                        raise last_error
-                    retry_after = None
-                    try:
-                        retry_after = e.response.headers.get("retry-after")
-                    except (AttributeError, TypeError, ValueError):
-                        pass
-                    if retry_after:
-                        try:
-                            delay = float(retry_after)
-                        except (TypeError, ValueError):
-                            delay = None
-                    else:
-                        delay = None
-                    if not delay:
-                        base = min(0.5 * (2 ** (attempt - 1)), 32)
-                        delay = base + random.random() * 0.25 * base
-                    time.sleep(delay)
-            raise last_error
-
-        return wrapper
-
-    return decorator
 
 
 class AnthropicClient(LLMClient):
     """Cliente para Anthropic Claude API.
 
-    Configuración:
-    - api_key: API key de Anthropic (obligatorio para generate())
-    - model: Modelo a usar (default: claude-sonnet-4-6)
-    - max_tokens: Máximo de tokens en la respuesta (default: 4096)
-    - timeout: Timeout en segundos (default: 60)
-
-    Nota: Si api_key es None, el cliente se puede instanciar pero generate()
-    lanzará RuntimeError. Esto permite mantener la API viva y devolver
-    errores controlados en /run.
+    Mejoras vs MVP anterior:
+    - Reutiliza instancia de ``anthropic.Anthropic`` (no crea por llamada)
+    - Retry centralizado con ``RetryPolicy`` y ``RetryState``
+    - Soporte de ``fallback_model`` y ``abort_event``
     """
 
     def __init__(
@@ -78,107 +36,123 @@ class AnthropicClient(LLMClient):
         model: str = "claude-sonnet-4-6",
         max_tokens: int = 4096,
         timeout: int = 60,
+        fallback_model: Optional[str] = None,
+        retry_policy: Optional[RetryPolicy] = None,
     ):
-        """Inicializar cliente Anthropic.
-
-        Args:
-            api_key: API key de Anthropic (puede ser None)
-            model: Modelo a usar
-            max_tokens: Máximo de tokens en la respuesta
-            timeout: Timeout en segundos
-        """
-        import os
         self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
         self.base_url = base_url or os.getenv("ANTHROPIC_BASE_URL")
         self.model = model
         self.max_tokens = max_tokens
         self.timeout = timeout
+        self.fallback_model = fallback_model
+        self.retry_policy = retry_policy or RetryPolicy()
+        self.retry_state = RetryState()
+        self.cache = PromptCache()
         self.logger = get_logger("agentos")
+        self._client = None  # Lazy-initialized, reused
 
-    @with_llm_retry()
-    def generate(self, prompt: str) -> str:
-        """Generar texto usando Anthropic Claude API.
-
-        Args:
-            prompt: Prompt de entrada
-
-        Returns:
-            Texto generado por el LLM
-
-        Raises:
-            RuntimeError: Si falta API key o hay error en la llamada
-        """
+    def _get_client(self):
+        """Get or create the anthropic client (singleton per AnthropicClient)."""
+        if self._client is not None:
+            return self._client
         if not self.api_key:
-            raise RuntimeError(
+            raise AuthenticationError(
                 "ANTHROPIC_API_KEY no configurada. "
                 "Configure la variable de entorno ANTHROPIC_API_KEY para usar Anthropic."
             )
-
         try:
             import anthropic
         except ImportError as e:
-            raise RuntimeError(
+            raise ConfigurationError(
                 "Paquete 'anthropic' no instalado. Ejecute: pip install anthropic"
             ) from e
 
-        self.logger.debug(
-            "Anthropic API request",
-            extra={
-                "model": self.model,
-                "prompt_length": len(prompt),
-                "max_tokens": self.max_tokens,
-            },
-        )
+        kwargs = {"api_key": self.api_key, "timeout": self.timeout}
+        if self.base_url:
+            kwargs["base_url"] = self.base_url
+        self._client = anthropic.Anthropic(**kwargs)
+        return self._client
 
-        try:
-            kwargs = {"api_key": self.api_key, "timeout": self.timeout}
-            if self.base_url:
-                kwargs["base_url"] = self.base_url
-            client = anthropic.Anthropic(**kwargs)
-
-            message = client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                messages=[{"role": "user", "content": prompt}],
-            )
-
-            content_blocks = message.content
-            if not content_blocks:
-                raise RuntimeError(
-                    "Anthropic API response inválida: sin bloques de contenido."
-                )
-
-            text_parts = [
-                block.text
-                for block in content_blocks
-                if hasattr(block, "text")
-            ]
-            content = "".join(text_parts)
-
-            if not content:
-                raise RuntimeError(
-                    f"Anthropic API response inválida: sin texto. "
-                    f"stop_reason={message.stop_reason}"
-                )
-
-            self.logger.debug(
-                "Anthropic API response received",
+    def _resolve_model(self) -> str:
+        """Return fallback model if consecutive failures exceed threshold."""
+        if (
+            self.fallback_model
+            and self.retry_state.consecutive_failures >= self.retry_policy.fallback_after_consecutive
+        ):
+            self.logger.warning(
+                "Switching to fallback model",
                 extra={
-                    "response_length": len(content),
-                    "stop_reason": message.stop_reason,
-                    "input_tokens": message.usage.input_tokens,
-                    "output_tokens": message.usage.output_tokens,
+                    "primary_model": self.model,
+                    "fallback_model": self.fallback_model,
+                    "consecutive_failures": self.retry_state.consecutive_failures,
                 },
             )
+            return self.fallback_model
+        return self.model
 
-            return content
+    def _do_generate(self, prompt: str, model: str) -> str:
+        """Single API call without retry (retry is handled by caller)."""
+        client = self._get_client()
 
-        except RuntimeError:
-            raise
+        self.logger.debug(
+            "Anthropic API request",
+            extra={"model": model, "prompt_length": len(prompt), "max_tokens": self.max_tokens},
+        )
 
-        except Exception as e:
-            self.logger.error(
-                "Anthropic API error inesperado",
-                extra={"error": str(e), "error_type": type(e).__name__},
+        message = client.messages.create(
+            model=model,
+            max_tokens=self.max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        content_blocks = message.content
+        if not content_blocks:
+            raise RuntimeError("Anthropic API response inválida: sin bloques de contenido.")
+
+        text_parts = [block.text for block in content_blocks if hasattr(block, "text")]
+        content = "".join(text_parts)
+
+        if not content:
+            raise RuntimeError(
+                f"Anthropic API response inválida: sin texto. stop_reason={message.stop_reason}"
             )
-            raise RuntimeError(f"Anthropic API error inesperado: {e}") from e
+
+        self.logger.debug(
+            "Anthropic API response received",
+            extra={
+                "response_length": len(content),
+                "stop_reason": message.stop_reason,
+                "input_tokens": message.usage.input_tokens,
+                "output_tokens": message.usage.output_tokens,
+            },
+        )
+        return content
+
+    def generate(
+        self,
+        prompt: str,
+        abort_event: Optional[threading.Event] = None,
+        use_cache: bool = True,
+    ) -> str:
+        """Generate text with retry, fallback model, cache, and abort support."""
+        # Check local cache first
+        if use_cache:
+            cached = self.cache.get(prompt)
+            if cached is not None:
+                return cached
+
+        model = self._resolve_model()
+
+        result = retry_llm_call(
+            self._do_generate,
+            prompt,
+            model,
+            policy=self.retry_policy,
+            abort_event=abort_event,
+            retry_state=self.retry_state,
+        )
+
+        if use_cache:
+            self.cache.put(prompt, result)
+
+        return result
